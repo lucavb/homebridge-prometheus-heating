@@ -1,0 +1,75 @@
+{
+    "name": "homebridge-deconz-shelly-thermostat",
+    "version": "1.0.0",
+    "description": "Homebridge platform plugin for infloor heating automation using deCONZ temperature sensors and Shelly relay switches",
+    "keywords": [
+        "homebridge-plugin",
+        "homebridge",
+        "heating",
+        "thermostat",
+        "deconz",
+        "shelly",
+        "homekit",
+        "temperature-control"
+    ],
+    "homepage": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat#readme",
+    "bugs": {
+        "url": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat.git"
+    },
+    "license": "ISC",
+    "author": {
+        "email": "hello@luca-becker.me",
+        "name": "Luca Becker",
+        "url": "https://luca-becker.me"
+    },
+    "main": "dist/index.js",
+    "files": [
+        "dist",
+        "*.json",
+        "*.md"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "clean": "rimraf dist",
+        "cq": "npm run cq:lint && npm run cq:format:check && npm run cq:type-check",
+        "cq:format": "prettier --write \"**/*.{ts,js,json,md}\"",
+        "cq:format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+        "cq:lint": "eslint .",
+        "cq:lint:fix": "eslint . --fix",
+        "cq:type-check": "tsc --noEmit",
+        "dev": "tsc --watch",
+        "prepare": "npm run build",
+        "test": "vitest --run",
+        "test:coverage": "vitest --coverage --run",
+        "test:ui": "vitest --ui",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "rxjs": "7.8.2",
+        "zod": "4.1.12"
+    },
+    "devDependencies": {
+        "@eslint/js": "9.39.0",
+        "@types/node": "22.18.13",
+        "@vitest/ui": "4.0.6",
+        "cross-env": "10.1.0",
+        "eslint": "9.39.0",
+        "hap-nodejs": "1.2.0",
+        "homebridge": "1.11.1",
+        "jiti": "2.6.1",
+        "prettier": "3.6.2",
+        "rimraf": "6.1.0",
+        "tsx": "4.20.6",
+        "typescript": "5.9.3",
+        "typescript-eslint": "8.46.2",
+        "vitest": "4.0.6"
+    },
+    "engines": {
+        "homebridge": ">=1.7.0",
+        "node": ">=22.0.0"
+    }
+}
