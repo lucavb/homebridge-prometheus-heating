@@ -267,7 +267,7 @@ You can configure the temperature window per accessory by adding the `temperatur
 1. Clone the repository:
 
     ```bash
-    git clone https://github.com/lucabecker/homebridge-deconz-shelly-thermostat.git
+    git clone https://github.com/lucavb/homebridge-deconz-shelly-thermostat.git
     cd homebridge-deconz-shelly-thermostat
     ```
 
@@ -337,4 +337,4 @@ ISC
 
 For issues, feature requests, or questions:
 
-- [GitHub Issues](https://github.com/lucabecker/homebridge-deconz-shelly-thermostat/issues)
+- [GitHub Issues](https://github.com/lucavb/homebridge-deconz-shelly-thermostat/issues)

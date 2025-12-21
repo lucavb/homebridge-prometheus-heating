@@ -1,6 +1,6 @@
 {
     "name": "homebridge-deconz-shelly-thermostat",
-    "version": "1.0.0",
+    "version": "0.0.1",
     "description": "Homebridge platform plugin for infloor heating automation using deCONZ temperature sensors and Shelly relay switches",
     "keywords": [
         "homebridge-plugin",
@@ -12,13 +12,13 @@
         "homekit",
         "temperature-control"
     ],
-    "homepage": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat#readme",
+    "homepage": "https://github.com/lucavb/homebridge-deconz-shelly-thermostat#readme",
     "bugs": {
-        "url": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat/issues"
+        "url": "https://github.com/lucavb/homebridge-deconz-shelly-thermostat/issues"
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/lucabecker/homebridge-deconz-shelly-thermostat.git"
+        "url": "https://github.com/lucavb/homebridge-deconz-shelly-thermostat.git"
     },
     "license": "ISC",
     "author": {
@@ -42,7 +42,8 @@
         "cq:lint:fix": "eslint . --fix",
         "cq:type-check": "tsc --noEmit",
         "dev": "tsc --watch",
-        "prepare": "husky && npm run build",
+        "prepare": "husky",
+        "release": "semantic-release",
         "test": "vitest --run",
         "test:coverage": "vitest --coverage --run",
         "test:ui": "vitest --ui",
@@ -53,7 +54,14 @@
         "zod": "4.1.12"
     },
     "devDependencies": {
+        "@commitlint/cli": "20.1.0",
+        "@commitlint/config-conventional": "20.0.0",
+        "@commitlint/types": "20.0.0",
         "@eslint/js": "9.39.0",
+        "@semantic-release/changelog": "6.0.3",
+        "@semantic-release/git": "10.0.1",
+        "@semantic-release/github": "12.0.1",
+        "@semantic-release/npm": "13.1.1",
         "@types/node": "22.18.13",
         "@vitest/ui": "4.0.6",
         "cross-env": "10.1.0",
@@ -65,6 +73,7 @@
         "lint-staged": "16.2.6",
         "prettier": "3.6.2",
         "rimraf": "6.1.0",
+        "semantic-release": "25.0.1",
         "tsx": "4.20.6",
         "typescript": "5.9.3",
         "typescript-eslint": "8.46.2",
