@@ -7,6 +7,7 @@ export const PLATFORM_NAME = 'DeconzShellyThermostat';
 
 export class HomebridgeHeatingPlatform implements DynamicPlatformPlugin {
     private readonly accessories: PlatformAccessory[] = [];
+    private readonly accessoryHandlers = new Map<string, HeatingAccessory>();
 
     private readonly validatedConfig?: HomebridgeHeatingConfig;
 
@@ -41,20 +42,51 @@ export class HomebridgeHeatingPlatform implements DynamicPlatformPlugin {
             return;
         }
 
+        const configuredUUIDs = new Set<string>();
+
         for (const accessoryConfig of this.validatedConfig.accessories) {
             const uuid = this.api.hap.uuid.generate(accessoryConfig.name);
+            configuredUUIDs.add(uuid);
+
             const existingAccessory = this.accessories.find((accessory) => accessory.UUID === uuid);
+
+            const oldHandler = this.accessoryHandlers.get(uuid);
+            if (oldHandler) {
+                this.logger.debug('Destroying old handler for:', accessoryConfig.name);
+                oldHandler.destroy();
+            }
 
             if (existingAccessory) {
                 this.logger.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-                new HeatingAccessory(this.logger, accessoryConfig, existingAccessory, this.api);
+                const handler = new HeatingAccessory(this.logger, accessoryConfig, existingAccessory, this.api);
+                this.accessoryHandlers.set(uuid, handler);
             } else {
                 this.logger.info('Adding new accessory:', accessoryConfig.name);
                 const accessory = new this.api.platformAccessory(accessoryConfig.name, uuid);
                 accessory.category = this.api.hap.Categories.THERMOSTAT;
-                new HeatingAccessory(this.logger, accessoryConfig, accessory, this.api);
+                const handler = new HeatingAccessory(this.logger, accessoryConfig, accessory, this.api);
+                this.accessoryHandlers.set(uuid, handler);
                 this.api.registerPlatformAccessories(PLUGIN_IDENTIFIED, PLATFORM_NAME, [accessory]);
                 this.accessories.push(accessory);
+            }
+        }
+
+        const staleAccessories = this.accessories.filter((accessory) => !configuredUUIDs.has(accessory.UUID));
+        if (staleAccessories.length > 0) {
+            this.logger.info('Removing', staleAccessories.length, 'stale accessories');
+            for (const accessory of staleAccessories) {
+                const handler = this.accessoryHandlers.get(accessory.UUID);
+                if (handler) {
+                    handler.destroy();
+                    this.accessoryHandlers.delete(accessory.UUID);
+                }
+            }
+            this.api.unregisterPlatformAccessories(PLUGIN_IDENTIFIED, PLATFORM_NAME, staleAccessories);
+            for (const accessory of staleAccessories) {
+                const index = this.accessories.indexOf(accessory);
+                if (index > -1) {
+                    this.accessories.splice(index, 1);
+                }
             }
         }
     }

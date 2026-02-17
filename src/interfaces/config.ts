@@ -17,6 +17,12 @@ export const accessoryConfigSchema = z.object({
     deconz: deconzConfigSchema,
     shelly: shellyConfigSchema,
     temperatureWindow: z.number().positive('Temperature window must be a positive number').optional().default(0.5),
+    pollingInterval: z
+        .number()
+        .int()
+        .positive('Polling interval must be a positive integer')
+        .optional()
+        .default(120000),
 });
 
 export const homebridgeHeatingConfigSchema = z

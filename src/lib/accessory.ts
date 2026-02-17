@@ -1,7 +1,7 @@
 import { API, Logging, PlatformAccessory } from 'homebridge';
 import { CharacteristicValue } from 'hap-nodejs';
 import { AccessoryConfig } from '../interfaces/config';
-import { BehaviorSubject, combineLatest, EMPTY, of, Subject, timer } from 'rxjs';
+import { BehaviorSubject, combineLatest, EMPTY, firstValueFrom, of, Subject, timer } from 'rxjs';
 import { DeconzClient } from './deconz';
 import { ThermostatState } from '../interfaces/homekit';
 import { ShellyClient } from './shelly';
@@ -13,6 +13,7 @@ export class HeatingAccessory {
     private readonly deconzClient?: DeconzClient;
     private readonly shelly?: ShellyClient;
     private readonly terminate: Subject<void> = new Subject<void>();
+    private isDestroyed = false;
 
     private readonly Service: HAP['Service'];
     private readonly Characteristic: HAP['Characteristic'];
@@ -23,6 +24,7 @@ export class HeatingAccessory {
     private readonly TargetHeatingCoolingStateInstance: HAP['Characteristic']['TargetHeatingCoolingState'];
     private readonly pluginOffStates: Set<number>;
     private readonly temperatureWindow: number;
+    private readonly pollingInterval: number;
 
     private readonly homekitState = new BehaviorSubject({
         current: 0,
@@ -45,6 +47,7 @@ export class HeatingAccessory {
             this.TargetHeatingCoolingStateInstance.COOL,
         ]);
         this.temperatureWindow = this.config.temperatureWindow ?? 0.5;
+        this.pollingInterval = this.config.pollingInterval ?? 120000;
 
         this.setupServices();
 
@@ -53,7 +56,7 @@ export class HeatingAccessory {
             return;
         }
 
-        this.api.on('shutdown', () => this.terminate.next());
+        this.api.on('shutdown', () => this.destroy());
 
         const { host: deconzHost, id: deconzId, user: deconzUsername } = this.config.deconz;
         this.deconzClient = new DeconzClient(deconzHost, deconzUsername, deconzId, fetch);
@@ -78,8 +81,20 @@ export class HeatingAccessory {
         this.setupPipe();
     }
 
+    public destroy(): void {
+        if (this.isDestroyed) {
+            return;
+        }
+        this.isDestroyed = true;
+
+        this.logger.debug('Destroying accessory:', this.config.name);
+        this.terminate.next();
+        this.terminate.complete();
+        this.homekitState.complete();
+    }
+
     private setupPipe(): void {
-        combineLatest([this.homekitState, timer(0, 2 * 60 * 1000)])
+        combineLatest([this.homekitState, timer(0, this.pollingInterval)])
             .pipe(
                 map(([state]: [ThermostatState, number]) => state),
                 switchMap((state: ThermostatState) => {
@@ -127,9 +142,13 @@ export class HeatingAccessory {
                         );
                     }
                 }),
-                catchError(() => {
-                    this.logger.error('could not trigger an update');
-                    return EMPTY;
+                catchError((error, caught) => {
+                    this.logger.error('Failed to update thermostat state:', {
+                        accessory: this.config.name,
+                        error: error instanceof Error ? error.message : String(error),
+                        stack: error instanceof Error ? error.stack : undefined,
+                    });
+                    return timer(5000).pipe(switchMap(() => caught));
                 }),
                 takeUntil(this.terminate),
             )
@@ -150,8 +169,8 @@ export class HeatingAccessory {
             this.Characteristic.CurrentHeatingCoolingState,
         );
         if (currentHeatingCoolingState) {
-            currentHeatingCoolingState.on('get', (callback) => {
-                callback(null, this.homekitState.getValue().current);
+            currentHeatingCoolingState.onGet(() => {
+                return this.homekitState.getValue().current;
             });
         }
 
@@ -159,57 +178,44 @@ export class HeatingAccessory {
             this.Characteristic.TargetHeatingCoolingState,
         );
         if (targetHeatingCoolingState) {
-            targetHeatingCoolingState.on('get', (callback) => {
-                callback(null, this.homekitState.getValue().target);
+            targetHeatingCoolingState.onGet(() => {
+                return this.homekitState.getValue().target;
             });
-            targetHeatingCoolingState.on('set', (value: CharacteristicValue, callback) => {
+            targetHeatingCoolingState.onSet((value: CharacteristicValue) => {
                 if (typeof value === 'number') {
                     this.homekitState.next({
                         ...this.homekitState.getValue(),
                         target: value,
                     });
                 }
-                callback();
             });
         }
 
         const currentTemperature = this.thermostat.getCharacteristic(this.Characteristic.CurrentTemperature);
         if (currentTemperature) {
-            currentTemperature.on('get', (callback) => {
-                if (this.deconzClient) {
-                    this.deconzClient
-                        .getTemperature()
-                        .pipe(
-                            take(1),
-                            timeout(10 * 1000),
-                            tap((val: number) => callback(null, val)),
-                            catchError((err) => {
-                                callback(err);
-                                return of(null);
-                            }),
-                            takeUntil(this.terminate),
-                        )
-                        .subscribe();
-                } else {
-                    this.logger.error('deconz client could not be setup?');
-                    callback(new Error('deconz client could not be setup?'));
+            currentTemperature.onGet(async () => {
+                if (!this.deconzClient) {
+                    this.logger.error('deconz client could not be setup');
+                    throw new Error('deconz client could not be setup');
                 }
+                return firstValueFrom(
+                    this.deconzClient.getTemperature().pipe(timeout(10 * 1000), takeUntil(this.terminate)),
+                );
             });
         }
 
         const targetTemperature = this.thermostat.getCharacteristic(this.Characteristic.TargetTemperature);
         if (targetTemperature) {
-            targetTemperature.on('get', (callback) => {
-                callback(null, this.homekitState.getValue().targetTemperature);
+            targetTemperature.onGet(() => {
+                return this.homekitState.getValue().targetTemperature;
             });
-            targetTemperature.on('set', (value: CharacteristicValue, callback) => {
+            targetTemperature.onSet((value: CharacteristicValue) => {
                 if (typeof value === 'number') {
                     this.homekitState.next({
                         ...this.homekitState.getValue(),
                         targetTemperature: value,
                     });
                 }
-                callback();
             });
         }
     }

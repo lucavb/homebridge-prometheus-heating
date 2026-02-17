@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { firstValueFrom } from 'rxjs';
 import { DeconzClient } from './deconz';
 import { DeconzSensorInfo } from '../interfaces/deconz';
 
@@ -40,18 +41,11 @@ describe('DeconzClient', () => {
         mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(mockResponse)));
 
         const client = new DeconzClient('localhost', 'testuser', 1, mockFetch as typeof fetch);
-        client.startInterval(1000);
 
         const temperature$ = client.getTemperature();
-        const temperature = await new Promise<number>((resolve) => {
-            temperature$.pipe().subscribe((temp) => {
-                resolve(temp);
-            });
-        });
+        const temperature = await firstValueFrom(temperature$);
 
         expect(mockFetch).toHaveBeenCalledWith('http://localhost/api/testuser/sensors/1');
         expect(temperature).toBe(25);
-
-        client.stopInterval();
     });
 });
