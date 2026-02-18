@@ -5,6 +5,13 @@
     "description": "Homebridge platform: room heating controlled via Prometheus temperature metrics and Shelly relays (hysteresis or PWM).",
     "author": "lucavb",
     "license": "GPL-3.0-or-later",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/lucavb/homebridge-prometheus-heating.git"
+    },
+    "publishConfig": {
+        "provenance": true
+    },
     "main": "dist/index.js",
     "engines": {
         "homebridge": ">=1.8.0 || >=2.0.0",
