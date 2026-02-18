@@ -1,0 +1,236 @@
+{
+    "pluginAlias": "PrometheusHeatingPlatform",
+    "pluginType": "platform",
+    "singular": true,
+    "headerDisplay": "Control room heating from Prometheus temperature metrics and Shelly relays. Uses hysteresis (corridor) control by default.",
+    "footerDisplay": "Set safe minOnMs/minOffMs to reduce relay wear. Stale sensor data turns heating off.",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "title": "Platform Name",
+                "type": "string",
+                "default": "Prometheus Heating",
+                "required": true,
+                "minLength": 2
+            },
+            "prometheus": {
+                "title": "Prometheus",
+                "type": "object",
+                "required": true,
+                "properties": {
+                    "baseUrl": {
+                        "title": "Base URL",
+                        "type": "string",
+                        "required": true,
+                        "format": "uri",
+                        "placeholder": "http://prometheus.local:9090"
+                    },
+                    "queryTimeoutMs": {
+                        "title": "Query Timeout (ms)",
+                        "type": "integer",
+                        "default": 5000,
+                        "minimum": 500,
+                        "maximum": 60000
+                    },
+                    "allowInsecureTls": {
+                        "title": "Allow Insecure TLS",
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "auth": {
+                        "title": "Authentication",
+                        "type": "object",
+                        "properties": {
+                            "mode": {
+                                "title": "Auth Mode",
+                                "type": "string",
+                                "default": "none",
+                                "oneOf": [
+                                    { "title": "None", "enum": ["none"] },
+                                    { "title": "Bearer Token", "enum": ["bearer"] }
+                                ],
+                                "required": true
+                            },
+                            "bearerToken": {
+                                "title": "Bearer Token",
+                                "type": "string",
+                                "condition": {
+                                    "functionBody": "return model.prometheus && model.prometheus.auth && model.prometheus.auth.mode === 'bearer';"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "control": {
+                "title": "Global Control Defaults",
+                "type": "object",
+                "properties": {
+                    "controlMode": {
+                        "title": "Control Mode",
+                        "type": "string",
+                        "default": "hysteresis",
+                        "oneOf": [
+                            { "title": "Hysteresis (corridor)", "enum": ["hysteresis"] },
+                            { "title": "PWM", "enum": ["pwm"] }
+                        ]
+                    },
+                    "pollIntervalMs": {
+                        "title": "Temperature Poll Interval (ms)",
+                        "type": "integer",
+                        "default": 30000,
+                        "minimum": 5000,
+                        "maximum": 300000
+                    },
+                    "hysteresisC": {
+                        "title": "Hysteresis (°C)",
+                        "type": "number",
+                        "default": 0.5,
+                        "minimum": 0,
+                        "maximum": 2
+                    },
+                    "minOnMs": {
+                        "title": "Minimum On Time (ms)",
+                        "type": "integer",
+                        "default": 600000,
+                        "minimum": 1000,
+                        "maximum": 1800000
+                    },
+                    "minOffMs": {
+                        "title": "Minimum Off Time (ms)",
+                        "type": "integer",
+                        "default": 600000,
+                        "minimum": 1000,
+                        "maximum": 1800000
+                    },
+                    "pwmCycleMs": {
+                        "title": "PWM Cycle Length (ms)",
+                        "type": "integer",
+                        "default": 300000,
+                        "minimum": 30000,
+                        "maximum": 1800000
+                    },
+                    "staleAfterMs": {
+                        "title": "Sensor Stale Timeout (ms)",
+                        "type": "integer",
+                        "default": 180000,
+                        "minimum": 10000,
+                        "maximum": 3600000
+                    }
+                }
+            },
+            "rooms": {
+                "title": "Rooms",
+                "type": "array",
+                "required": true,
+                "items": {
+                    "title": "Room",
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "title": "Room ID",
+                            "type": "string",
+                            "required": true,
+                            "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$",
+                            "description": "Stable unique identifier (e.g. living, bedroom)."
+                        },
+                        "displayName": {
+                            "title": "Display Name",
+                            "type": "string",
+                            "required": true,
+                            "minLength": 1
+                        },
+                        "promQuery": {
+                            "title": "PromQL Temperature Query",
+                            "type": "string",
+                            "required": true,
+                            "placeholder": "room_temperature_celsius{room=\"living\"}"
+                        },
+                        "targetTemperatureC": {
+                            "title": "Target Temperature (°C)",
+                            "type": "number",
+                            "default": 21,
+                            "minimum": 5,
+                            "maximum": 35
+                        },
+                        "minTargetTemperatureC": {
+                            "title": "Min Target Temperature (°C)",
+                            "type": "number",
+                            "default": 16,
+                            "minimum": 5,
+                            "maximum": 35
+                        },
+                        "maxTargetTemperatureC": {
+                            "title": "Max Target Temperature (°C)",
+                            "type": "number",
+                            "default": 24,
+                            "minimum": 5,
+                            "maximum": 35
+                        },
+                        "shelly": {
+                            "title": "Shelly Output",
+                            "type": "object",
+                            "required": true,
+                            "properties": {
+                                "host": {
+                                    "title": "Device Host / IP",
+                                    "type": "string",
+                                    "required": true,
+                                    "placeholder": "172.16.0.52"
+                                },
+                                "generation": {
+                                    "title": "Shelly API Generation",
+                                    "type": "string",
+                                    "default": "auto",
+                                    "oneOf": [
+                                        { "title": "Auto Detect", "enum": ["auto"] },
+                                        { "title": "Gen1", "enum": ["gen1"] },
+                                        { "title": "Gen2/Gen3 RPC", "enum": ["gen23"] }
+                                    ],
+                                    "required": true
+                                },
+                                "switchId": {
+                                    "title": "Switch ID",
+                                    "type": "integer",
+                                    "default": 0,
+                                    "minimum": 0,
+                                    "maximum": 8
+                                },
+                                "username": { "title": "Username", "type": "string" },
+                                "password": { "title": "Password", "type": "string" },
+                                "requestTimeoutMs": {
+                                    "title": "Request Timeout (ms)",
+                                    "type": "integer",
+                                    "default": 5000,
+                                    "minimum": 500,
+                                    "maximum": 60000
+                                }
+                            }
+                        },
+                        "override": {
+                            "title": "Per-Room Control Overrides",
+                            "type": "object",
+                            "properties": {
+                                "pollIntervalMs": { "type": "integer", "minimum": 5000, "maximum": 300000 },
+                                "pwmCycleMs": { "type": "integer", "minimum": 30000, "maximum": 1800000 },
+                                "minOnMs": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+                                "minOffMs": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+                                "deadbandC": { "type": "number", "minimum": 0, "maximum": 2 }
+                            }
+                        },
+                        "enabled": { "title": "Enabled", "type": "boolean", "default": true }
+                    }
+                }
+            },
+            "logging": {
+                "title": "Logging",
+                "type": "object",
+                "properties": {
+                    "debug": { "title": "Debug Logs", "type": "boolean", "default": false },
+                    "logPromQueries": { "title": "Log PromQL Queries", "type": "boolean", "default": false }
+                }
+            }
+        }
+    }
+}

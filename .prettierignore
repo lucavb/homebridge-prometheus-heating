@@ -1,0 +1,11 @@
+# Dependencies (vendor)
+node_modules/
+
+# Build output (generated)
+dist/
+
+# Test coverage (generated)
+coverage/
+
+# Lock files (keep as-is)
+package-lock.json
