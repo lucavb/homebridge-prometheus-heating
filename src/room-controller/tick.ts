@@ -25,8 +25,12 @@ export function evaluateSampleHealth(
     sampleAgeMs: number,
     staleAfterMs: number,
 ): SampleHealth {
-    if (currentTempC === null) return 'missing';
-    if (sampleAgeMs > staleAfterMs) return 'stale';
+    if (currentTempC === null) {
+        return 'missing';
+    }
+    if (sampleAgeMs > staleAfterMs) {
+        return 'stale';
+    }
     return 'ok';
 }
 
@@ -37,7 +41,9 @@ export function logSampleHealthTransition(
     nextHealth: SampleHealth,
     sampleAgeMs: number,
 ): void {
-    if (nextHealth === prevHealth) return;
+    if (nextHealth === prevHealth) {
+        return;
+    }
     if (nextHealth === 'missing') {
         log.warn(`[${roomId}] Prometheus returned no sample; forcing heating off.`);
     } else if (nextHealth === 'stale') {
