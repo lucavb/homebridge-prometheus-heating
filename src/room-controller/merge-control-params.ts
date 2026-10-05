@@ -6,12 +6,13 @@ export function mergeControlParams(global: ControlConfig, room: RoomConfig) {
     return {
         controlMode: global.controlMode,
         hysteresisC: o?.deadbandC ?? global.hysteresisC,
+        maxTargetTemperatureC: room.maxTargetTemperatureC,
         maxTemperatureC: global.maxTemperatureC,
         minOffMs: o?.minOffMs ?? global.minOffMs,
         minOnMs: o?.minOnMs ?? global.minOnMs,
+        minTargetTemperatureC: room.minTargetTemperatureC,
         minTemperatureC: global.minTemperatureC,
         pwmCycleMs: o?.pwmCycleMs ?? global.pwmCycleMs,
         staleAfterMs: global.staleAfterMs,
-        targetTemperatureC: room.targetTemperatureC,
     } as const satisfies ControlParams;
 }

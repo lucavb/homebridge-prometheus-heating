@@ -1,15 +1,18 @@
 export type ControlMode = 'hysteresis' | 'pwm';
 
+export type SampleHealth = 'ok' | 'missing' | 'stale' | 'invalid';
+
 export interface ControlParams {
     controlMode: ControlMode;
-    targetTemperatureC: number;
     hysteresisC: number;
+    maxTargetTemperatureC: number;
+    maxTemperatureC: number;
     minOnMs: number;
     minOffMs: number;
+    minTargetTemperatureC: number;
+    minTemperatureC: number;
     pwmCycleMs: number;
     staleAfterMs: number;
-    minTemperatureC: number;
-    maxTemperatureC: number;
 }
 
 export interface ControllerState {
@@ -26,53 +29,104 @@ const SAFE_DEFAULT_STATE: ControllerState = {
     pwmCycleStartMs: 0,
 };
 
+const MODE_OFF = 0; // HAP TargetHeatingCoolingState.OFF
+
 function isTemperatureValid(value: number, minC: number, maxC: number): boolean {
     return Number.isFinite(value) && value >= minC && value <= maxC;
 }
 
-export interface EvaluateHeatingStateOptions {
-    /** When true, minOnMs / minOffMs are ignored. Use only for user-triggered actions. */
-    bypassMinCycles?: boolean;
+export interface ControlInput {
+    /** HAP mode constant: 0 = OFF, 1 = HEAT. */
+    mode: number;
+    nowMs: number;
+    sampleTempC: number | null;
+    /** Age of the sample in ms, as derived by the caller; Infinity = no usable timestamp. */
+    sampleAgeMs: number;
+    targetC: number;
+    params: ControlParams;
+    state: ControllerState;
+    /**
+     * When true, minOnMs / minOffMs are skipped. Use only for user-triggered
+     * actions. Health force-off (missing/stale/invalid samples) still applies.
+     */
+    bypassMinCycles: boolean;
 }
 
-export function evaluateHeatingState(
-    nowMs: number,
-    currentTemperatureC: number | null,
-    lastSampleTimestampMs: number,
-    params: ControlParams,
-    state: ControllerState,
-    options?: EvaluateHeatingStateOptions,
-): { relayOn: boolean; state: ControllerState } {
-    const stale = nowMs - lastSampleTimestampMs > params.staleAfterMs;
-    if (stale || currentTemperatureC === null) {
-        return { relayOn: false, state: { ...state, relayOn: false } };
+export interface ControlDecision {
+    relayOn: boolean;
+    state: ControllerState;
+    clampedTargetC: number | undefined;
+    health: SampleHealth;
+}
+
+function forcedOff(state: ControllerState, clampedTargetC: number | undefined, health: SampleHealth): ControlDecision {
+    return { relayOn: false, state: { ...state, relayOn: false }, clampedTargetC, health };
+}
+
+export function evaluateControl(input: ControlInput): ControlDecision {
+    const { mode, nowMs, params, state, bypassMinCycles } = input;
+    // Bound once so the null-check below narrows the value for the whole
+    // ok-path; re-reading input.sampleTempC would defeat control-flow analysis.
+    const sampleTempC = input.sampleTempC;
+
+    if (mode === MODE_OFF) {
+        let health: SampleHealth;
+        if (sampleTempC === null) {
+            health = 'missing';
+        } else if (input.sampleAgeMs > params.staleAfterMs) {
+            health = 'stale';
+        } else if (!isTemperatureValid(sampleTempC, params.minTemperatureC, params.maxTemperatureC)) {
+            health = 'invalid';
+        } else {
+            health = 'ok';
+        }
+        return {
+            relayOn: false,
+            state: {
+                ...state,
+                relayOn: false,
+                lastOffAt: state.relayOn ? nowMs : state.lastOffAt,
+            },
+            clampedTargetC: undefined,
+            health,
+        };
     }
 
-    if (!isTemperatureValid(currentTemperatureC, params.minTemperatureC, params.maxTemperatureC)) {
-        return { relayOn: false, state: { ...state, relayOn: false } };
+    const clampedTargetC = Math.max(
+        params.minTargetTemperatureC,
+        Math.min(params.maxTargetTemperatureC, input.targetC),
+    );
+
+    // Health force-off comes before any min-cycle logic; bypassMinCycles does
+    // not suppress it. Each case returns early so sampleTempC is narrowed to
+    // number for the decision path below.
+    if (sampleTempC === null) {
+        return forcedOff(state, clampedTargetC, 'missing');
+    }
+    if (input.sampleAgeMs > params.staleAfterMs) {
+        return forcedOff(state, clampedTargetC, 'stale');
+    }
+    if (!isTemperatureValid(sampleTempC, params.minTemperatureC, params.maxTemperatureC)) {
+        return forcedOff(state, clampedTargetC, 'invalid');
     }
 
-    const target = params.targetTemperatureC;
+    const target = clampedTargetC;
     const low = target - params.hysteresisC;
     const high = target + params.hysteresisC;
 
+    let workingState = state;
     let desiredOn: boolean;
     if (params.controlMode === 'hysteresis') {
-        desiredOn = currentTemperatureC < low;
+        desiredOn = sampleTempC < low;
         const turnOffThreshold = high;
-        if (state.relayOn && currentTemperatureC >= turnOffThreshold) {
+        if (workingState.relayOn && sampleTempC >= turnOffThreshold) {
             desiredOn = false;
-        } else if (!state.relayOn && currentTemperatureC < low) {
+        } else if (!workingState.relayOn && sampleTempC < low) {
             desiredOn = true;
         }
     } else {
-        const duty =
-            currentTemperatureC < low
-                ? 1
-                : currentTemperatureC >= high
-                  ? 0
-                  : (high - currentTemperatureC) / (high - low);
-        let cycleStart = state.pwmCycleStartMs;
+        const duty = sampleTempC < low ? 1 : sampleTempC >= high ? 0 : (high - sampleTempC) / (high - low);
+        let cycleStart = workingState.pwmCycleStartMs;
         const elapsed = nowMs - cycleStart;
         const cycleMs = params.pwmCycleMs;
         if (elapsed >= cycleMs || cycleStart === 0) {
@@ -80,14 +134,14 @@ export function evaluateHeatingState(
         }
         const pos = (nowMs - cycleStart) / cycleMs;
         desiredOn = pos < duty;
-        state = { ...state, pwmCycleStartMs: cycleStart };
+        workingState = { ...workingState, pwmCycleStartMs: cycleStart };
     }
 
-    const minOnSatisfied = !state.relayOn || nowMs - state.lastOnAt >= params.minOnMs;
-    const minOffSatisfied = state.relayOn || nowMs - state.lastOffAt >= params.minOffMs;
+    const minOnSatisfied = !workingState.relayOn || nowMs - workingState.lastOnAt >= params.minOnMs;
+    const minOffSatisfied = workingState.relayOn || nowMs - workingState.lastOffAt >= params.minOffMs;
 
     let relayOn = desiredOn;
-    if (!options?.bypassMinCycles) {
+    if (!bypassMinCycles) {
         if (relayOn && !minOffSatisfied) {
             relayOn = false;
         }
@@ -97,13 +151,13 @@ export function evaluateHeatingState(
     }
 
     const nextState: ControllerState = {
-        ...state,
+        ...workingState,
         relayOn,
-        lastOnAt: relayOn ? (state.relayOn ? state.lastOnAt : nowMs) : state.lastOnAt,
-        lastOffAt: relayOn ? state.lastOffAt : state.relayOn ? nowMs : state.lastOffAt,
+        lastOnAt: relayOn ? (workingState.relayOn ? workingState.lastOnAt : nowMs) : workingState.lastOnAt,
+        lastOffAt: relayOn ? workingState.lastOffAt : workingState.relayOn ? nowMs : workingState.lastOffAt,
     };
 
-    return { relayOn, state: nextState };
+    return { relayOn, state: nextState, clampedTargetC, health: 'ok' };
 }
 
 export interface GetInitialControllerStateDeps {

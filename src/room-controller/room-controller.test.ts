@@ -90,8 +90,10 @@ function createFakeThermostat(
             tempHandler?.(value);
         },
         simulateModeSet(value: number) {
-            currentMode = value; // simulates HAP committing the value after callback
+            // Real HAP commits the characteristic value only after the set
+            // callback fires, so invoke the handler first and commit after.
             modeHandler?.(value);
+            currentMode = value;
         },
         updates,
     };
@@ -353,9 +355,7 @@ describe('createRoomController', () => {
         controller.stop();
     });
 
-    it('turning mode OFF triggers an immediate tick and forces relay off', async () => {
-        // Room is cold (20°C) and target is 21°C so normal control would turn relay ON.
-        // When the user flips mode to OFF, the relay must be forced off immediately.
+    it('mode change triggers an immediate tick', async () => {
         const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21, 1); // starts in HEAT mode
         const setOnArgs: boolean[] = [];
@@ -380,10 +380,7 @@ describe('createRoomController', () => {
         } as unknown as Logging;
 
         const controller = createRoomController({
-            config: {
-                ...config,
-                control: { ...config.control, minOnMs: 0, minOffMs: 0 },
-            },
+            config,
             deps: {
                 clock: { now: () => 200_000 },
                 createPrometheusClient: () => fakePrometheus,
@@ -403,14 +400,171 @@ describe('createRoomController', () => {
         controller.start();
         // Wait for startup tick.
         await vi.waitFor(() => expect(setOnArgs.length).toBeGreaterThanOrEqual(1));
-        setOnArgs.length = 0;
+        const callsAfterStart = setOnArgs.length;
 
-        // User flips mode to OFF.
+        // User flips mode to OFF – handler fires an immediate tick. The startup
+        // tick (temp 20, target 21 → HEAT decides on) called setOn(true); the
+        // OFF branch of evaluateControl must force setOn(false) end-to-end.
         thermostat.simulateModeSet(0);
-        await vi.waitFor(() => expect(setOnArgs.length).toBeGreaterThanOrEqual(1));
+        await vi.waitFor(() => expect(setOnArgs.length).toBeGreaterThan(callsAfterStart));
 
         // Relay must have been turned off.
         expect(setOnArgs[setOnArgs.length - 1]).toBe(false);
+
+        controller.stop();
+    });
+
+    it('treats a sample without a timestamp as infinitely old and forces the relay off', async () => {
+        // Sentinel-path pin for the single staleness rule: value present but
+        // timestampMs 0 → age derivation must yield Infinity → stale → setOn(false).
+        const config = { ...minimalConfig, rooms: [minimalRoom] };
+        const thermostat = createFakeThermostat(21);
+        const setOnArgs: boolean[] = [];
+        const warn = vi.fn();
+        const log = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn,
+            error: vi.fn(),
+            prefix: '',
+            success: vi.fn(),
+            log: vi.fn(),
+        } as unknown as Logging;
+        const fakePrometheus = {
+            query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 0 }),
+        } as unknown as PrometheusClient;
+        const fakeDriver: ShellyDriver = {
+            setOn: vi.fn().mockImplementation((v: boolean) => {
+                setOnArgs.push(v);
+                return Promise.resolve();
+            }),
+            getOn: vi.fn().mockResolvedValue(false),
+        };
+
+        const controller = createRoomController({
+            config,
+            deps: {
+                clock: { now: () => 200_000 },
+                createPrometheusClient: () => fakePrometheus,
+                createShellyDriver: async () => fakeDriver,
+                intervalScheduler: {
+                    setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
+                    clearInterval: vi.fn(),
+                },
+            },
+            log,
+            onStatePersist: () => {},
+            persistedState: undefined,
+            room: minimalRoom,
+            thermostat,
+        });
+
+        controller.start();
+        await vi.waitFor(() => expect(setOnArgs.length).toBeGreaterThanOrEqual(1));
+        expect(setOnArgs[setOnArgs.length - 1]).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('no timestamp'));
+
+        controller.stop();
+    });
+
+    it('does not call onStatePersist when the Shelly setOn call rejects', async () => {
+        const config = { ...minimalConfig, rooms: [minimalRoom] };
+        const thermostat = createFakeThermostat(21);
+        const persistCalls: [string, boolean][] = [];
+        const warn = vi.fn();
+        const log = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn,
+            error: vi.fn(),
+            prefix: '',
+            success: vi.fn(),
+            log: vi.fn(),
+        } as unknown as Logging;
+        const fakePrometheus = {
+            query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
+        } as unknown as PrometheusClient;
+        const fakeDriver: ShellyDriver = {
+            setOn: vi.fn().mockRejectedValue(new Error('boom')),
+            getOn: vi.fn().mockResolvedValue(false),
+        };
+
+        const controller = createRoomController({
+            config,
+            deps: {
+                clock: { now: () => 200_000 },
+                createPrometheusClient: () => fakePrometheus,
+                createShellyDriver: async () => fakeDriver,
+                intervalScheduler: {
+                    setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
+                    clearInterval: vi.fn(),
+                },
+            },
+            log,
+            onStatePersist: (roomId, relayOn) => persistCalls.push([roomId, relayOn]),
+            persistedState: undefined,
+            room: minimalRoom,
+            thermostat,
+        });
+
+        controller.start();
+        // The tick still completes (thermostat updates run after the failed apply).
+        await vi.waitFor(() => expect(thermostat.updates.currentTemp).toBe(20));
+
+        expect(persistCalls.length).toBe(0);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Shelly setOn failed'));
+
+        controller.stop();
+    });
+
+    it('calls onStatePersist on every successful setOn, even when the relay value is unchanged', async () => {
+        const config = { ...minimalConfig, rooms: [minimalRoom] };
+        const thermostat = createFakeThermostat(21);
+        const persistCalls: [string, boolean][] = [];
+        const log = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            prefix: '',
+            success: vi.fn(),
+            log: vi.fn(),
+        } as unknown as Logging;
+        const fakePrometheus = {
+            query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
+        } as unknown as PrometheusClient;
+        const fakeDriver: ShellyDriver = {
+            setOn: vi.fn().mockResolvedValue(undefined),
+            getOn: vi.fn().mockResolvedValue(false),
+        };
+
+        const controller = createRoomController({
+            config,
+            deps: {
+                clock: { now: () => 200_000 },
+                createPrometheusClient: () => fakePrometheus,
+                createShellyDriver: async () => fakeDriver,
+                intervalScheduler: {
+                    setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
+                    clearInterval: vi.fn(),
+                },
+            },
+            log,
+            onStatePersist: (roomId, relayOn) => persistCalls.push([roomId, relayOn]),
+            persistedState: undefined,
+            room: minimalRoom,
+            thermostat,
+        });
+
+        controller.start();
+        // Startup tick: temp 20, target 21 → relay ON → persist #1.
+        await vi.waitFor(() => expect(persistCalls.length).toBe(1));
+
+        // Second tick with the same decision → relay stays ON → persist #2
+        // (not debounced: every successful setOn persists).
+        thermostat.simulateTargetSet(21);
+        await vi.waitFor(() => expect(persistCalls.length).toBe(2));
+        expect(persistCalls.every(([id, on]) => id === 'room1' && on === true)).toBe(true);
 
         controller.stop();
     });
