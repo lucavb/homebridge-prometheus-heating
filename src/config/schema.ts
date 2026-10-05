@@ -64,7 +64,6 @@ const roomSchema = z
 const controlSchema = z.object({
     controlMode: z.enum(['hysteresis', 'pwm']).default('hysteresis'),
     pollIntervalMs: z.number().int().min(5000).max(300_000).default(30_000),
-    targetTemperatureC: z.number().min(5).max(35).default(21),
     hysteresisC: z.number().min(0).max(2).default(0.5),
     minOnMs: z.number().int().min(1000).max(1_800_000).default(600_000),
     minOffMs: z.number().int().min(1000).max(1_800_000).default(600_000),

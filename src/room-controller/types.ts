@@ -1,7 +1,7 @@
 import type { Logging } from 'homebridge';
-import type { PluginConfig, RoomConfig, ShellyConfig } from '../config/schema.ts';
-import type { PrometheusClientOptions } from '../clients/prometheus-client.ts';
-import { PrometheusClient } from '../clients/prometheus-client.ts';
+import type { RoomConfig, ShellyConfig } from '../config/schema.ts';
+import type { PrometheusClient } from '../clients/prometheus-client.ts';
+import type { ControlParams } from '../control/heating-controller.ts';
 import { createShellyDriverWithProbe } from '../shelly/index.ts';
 import type { ShellyDriver } from '../shelly/shelly-driver.ts';
 import type { RoomThermostatAccessory } from '../accessories/room-thermostat.ts';
@@ -13,7 +13,6 @@ export const HEAT = 1;
 export const OFF = 0;
 
 export interface RoomControllerDeps {
-    createPrometheusClient: (opts: PrometheusClientOptions) => PrometheusClient;
     createShellyDriver: (config: ShellyConfig) => Promise<ShellyDriver>;
     clock: Clock;
     intervalScheduler: IntervalScheduler;
@@ -21,7 +20,10 @@ export interface RoomControllerDeps {
 
 export interface RoomControllerOptions {
     log: Logging;
-    config: PluginConfig;
+    prometheus: PrometheusClient;
+    params: ControlParams;
+    pollIntervalMs: number;
+    logging: { debug: boolean; logPromQueries: boolean };
     room: RoomConfig;
     thermostat: RoomThermostatAccessory;
     persistedState: RoomPersistedState | undefined;
@@ -31,7 +33,6 @@ export interface RoomControllerOptions {
 
 export const defaultRoomControllerDeps = {
     clock: defaultClock,
-    createPrometheusClient: (opts) => new PrometheusClient(opts),
     createShellyDriver: (config) => createShellyDriverWithProbe(config),
     intervalScheduler: defaultIntervalScheduler,
 } as const satisfies RoomControllerDeps;

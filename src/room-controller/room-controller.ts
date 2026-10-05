@@ -6,17 +6,12 @@ import {
 } from '../control/heating-controller.ts';
 import type { ShellyDriver } from '../shelly/shelly-driver.ts';
 import { type RoomControllerOptions, type RoomControllerDeps, defaultRoomControllerDeps, HEAT, OFF } from './types.ts';
-import { mergeControlParams } from './merge-control-params.ts';
-import { createPrometheusClientFromConfig } from './create-prometheus-client.ts';
 
 export function createRoomController(options: RoomControllerOptions): { start: () => void; stop: () => void } {
-    const { log, config, room, thermostat, persistedState, onStatePersist } = options;
+    const { log, prometheus, params, pollIntervalMs, logging, room, thermostat, persistedState, onStatePersist } =
+        options;
     const deps: RoomControllerDeps =
         options.deps !== undefined ? { ...defaultRoomControllerDeps, ...options.deps } : defaultRoomControllerDeps;
-
-    const prometheus = createPrometheusClientFromConfig(config, deps);
-    const params = mergeControlParams(config.control, room);
-    const pollIntervalMs = room.override?.pollIntervalMs ?? config.control.pollIntervalMs;
 
     let shellyDriver: ShellyDriver | null = null;
     let controllerState: ControllerState = getInitialControllerState(persistedState?.relayOn, {
@@ -108,7 +103,7 @@ export function createRoomController(options: RoomControllerOptions): { start: (
         // await — before callback() is called.
         const mode = userSetMode ?? thermostat.getTargetHeatingCoolingState();
 
-        if (config.logging.logPromQueries) {
+        if (logging.logPromQueries) {
             log.debug(`[${room.id}] PromQL: ${room.promQuery}`);
         }
 
@@ -139,7 +134,7 @@ export function createRoomController(options: RoomControllerOptions): { start: (
 
         updateThermostat(tempC, decision.clampedTargetC, decision.relayOn);
 
-        if (config.logging.debug) {
+        if (logging.debug) {
             const tempText = tempC === null ? 'n/a' : `${tempC.toFixed(2)}C`;
             const ageText = Number.isFinite(sampleAgeMs) ? `${Math.round(sampleAgeMs / 1000)}s` : 'n/a';
             const targetText = decision.clampedTargetC !== undefined ? `${decision.clampedTargetC.toFixed(2)}C` : 'off';

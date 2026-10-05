@@ -1,5 +1,5 @@
-import type { ControlConfig, RoomConfig } from '../config/schema.ts';
 import type { ControlParams } from '../control/heating-controller.ts';
+import type { ControlConfig, RoomConfig } from './schema.ts';
 
 export function mergeControlParams(global: ControlConfig, room: RoomConfig) {
     const o = room.override;

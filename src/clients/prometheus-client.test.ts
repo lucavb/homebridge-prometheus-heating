@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PrometheusClient } from './prometheus-client.ts';
 import type { HttpClient, HttpClientResponse } from '../runtime/dependencies.ts';
+import { Agent } from 'undici';
 
 function fakeHttpClient(responses: HttpClientResponse[]): HttpClient {
     let index = 0;
@@ -125,5 +126,79 @@ describe('PrometheusClient', () => {
         });
         await client.query('temp');
         expect(capturedHeaders['Authorization']).toBe('Bearer secret');
+    });
+
+    it('passes an undici dispatcher when allowInsecureTls is enabled', async () => {
+        let capturedInit: RequestInit | undefined;
+        const client = new PrometheusClient({
+            baseUrl: 'http://prom:9090',
+            queryTimeoutMs: 5000,
+            allowInsecureTls: true,
+            deps: {
+                httpClient: {
+                    fetch: async (_url: string, options) => {
+                        capturedInit = options;
+                        return {
+                            ok: true,
+                            status: 200,
+                            json: async () => ({
+                                data: { resultType: 'scalar', result: [0, 20] },
+                            }),
+                        };
+                    },
+                },
+            },
+        });
+        await client.query('temp');
+        expect(capturedInit?.dispatcher).toBeInstanceOf(Agent);
+    });
+
+    it('does not pass a dispatcher when allowInsecureTls is disabled or omitted', async () => {
+        for (const options of [{ allowInsecureTls: false }, {}]) {
+            let capturedInit: RequestInit | undefined;
+            const client = new PrometheusClient({
+                baseUrl: 'http://prom:9090',
+                queryTimeoutMs: 5000,
+                ...options,
+                deps: {
+                    httpClient: {
+                        fetch: async (_url: string, options) => {
+                            capturedInit = options;
+                            return {
+                                ok: true,
+                                status: 200,
+                                json: async () => ({
+                                    data: { resultType: 'scalar', result: [0, 20] },
+                                }),
+                            };
+                        },
+                    },
+                },
+            });
+            await client.query('temp');
+            expect(capturedInit?.dispatcher).toBeUndefined();
+        }
+    });
+
+    it('creates the insecure-TLS agent with rejectUnauthorized: false', async () => {
+        const createAgent = vi.fn(() => new Agent());
+        const client = new PrometheusClient({
+            baseUrl: 'http://prom:9090',
+            queryTimeoutMs: 5000,
+            allowInsecureTls: true,
+            deps: {
+                createAgent,
+                httpClient: fakeHttpClient([
+                    {
+                        ok: true,
+                        status: 200,
+                        json: async () => ({ data: { resultType: 'scalar', result: [0, 20] } }),
+                    },
+                ]),
+            },
+        });
+        await client.query('temp');
+        expect(createAgent).toHaveBeenCalledTimes(1);
+        expect(createAgent).toHaveBeenCalledWith({ connect: { rejectUnauthorized: false } });
     });
 });

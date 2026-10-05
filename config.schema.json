@@ -36,7 +36,8 @@
                     "allowInsecureTls": {
                         "title": "Allow Insecure TLS",
                         "type": "boolean",
-                        "default": false
+                        "default": false,
+                        "description": "Warning: disables certificate validation for the Prometheus connection; with bearer auth the token is sent over an unvalidated connection."
                     },
                     "auth": {
                         "title": "Authentication",

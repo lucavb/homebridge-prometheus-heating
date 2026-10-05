@@ -41,18 +41,21 @@ Add the platform in your Homebridge config (or use the Homebridge UI):
 
 ## Configuration (camelCase)
 
-| Field                                      | Required | Description                                        |
-| ------------------------------------------ | -------- | -------------------------------------------------- |
-| `name`                                     | Yes      | Platform display name                              |
-| `prometheus.baseUrl`                       | Yes      | Prometheus base URL                                |
-| `prometheus.queryTimeoutMs`                | No       | Query timeout in ms (default `5000`)               |
-| `prometheus.auth.mode`                     | No       | `none` or `bearer`; if `bearer`, set `bearerToken` |
-| `control.controlMode`                      | No       | `hysteresis` (default) or `pwm`                    |
-| `control.pollIntervalMs`                   | No       | Poll interval in ms (default `30000`)              |
-| `control.hysteresisC`                      | No       | Corridor half-width in °C (default `0.5`)          |
-| `control.minOnMs` / `control.minOffMs`     | No       | Min on/off time in ms (default `600000`)           |
-| `rooms`                                    | Yes      | Array of room configs                              |
-| `logging.debug` / `logging.logPromQueries` | No       | Optional logging flags                             |
+| Field                                      | Required | Description                                         |
+| ------------------------------------------ | -------- | --------------------------------------------------- |
+| `name`                                     | Yes      | Platform display name                               |
+| `prometheus.baseUrl`                       | Yes      | Prometheus base URL                                 |
+| `prometheus.queryTimeoutMs`                | No       | Query timeout in ms (default `5000`)                |
+| `prometheus.auth.mode`                     | No       | `none` or `bearer`; if `bearer`, set `bearerToken`  |
+| `prometheus.allowInsecureTls`              | No       | Accept self-signed certs (disables cert validation) |
+| `control.controlMode`                      | No       | `hysteresis` (default) or `pwm`                     |
+| `control.pollIntervalMs`                   | No       | Poll interval in ms (default `30000`)               |
+| `control.hysteresisC`                      | No       | Corridor half-width in °C (default `0.5`)           |
+| `control.minOnMs` / `control.minOffMs`     | No       | Min on/off time in ms (default `600000`)            |
+| `rooms`                                    | Yes      | Array of room configs                               |
+| `logging.debug` / `logging.logPromQueries` | No       | Optional logging flags                              |
+
+**Warning:** `prometheus.allowInsecureTls` disables certificate validation for the Prometheus connection; with bearer auth the token is sent over an unvalidated connection.
 
 Each **room** must have: `id`, `displayName`, `promQuery`, `shelly.host`. Optional: `shelly.generation` (`auto` / `gen1` / `gen23`), `shelly.switchId`, `targetTemperatureC`, `minTargetTemperatureC`, `maxTargetTemperatureC`, and `override` (e.g. `pollIntervalMs`, `minOnMs`, `minOffMs`, `deadbandC`).
 

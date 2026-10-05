@@ -1,6 +1,8 @@
 import type { API, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig } from 'homebridge';
 import { APIEvent } from 'homebridge';
 import { pluginConfigSchema, type PluginConfig } from './config/schema.ts';
+import { mergeControlParams } from './config/merge-control-params.ts';
+import { PrometheusClient } from './clients/prometheus-client.ts';
 import { createRoomThermostat } from './accessories/room-thermostat.ts';
 import { createRoomController } from './room-controller/index.ts';
 import {
@@ -76,6 +78,21 @@ export class PrometheusHeatingPlatform implements DynamicPlatformPlugin {
 
         const toRegister: PlatformAccessory[] = [];
 
+        const auth = this.config.prometheus.auth;
+        const prometheus = new PrometheusClient({
+            baseUrl: this.config.prometheus.baseUrl,
+            queryTimeoutMs: this.config.prometheus.queryTimeoutMs,
+            auth:
+                auth.mode === 'bearer' && auth.bearerToken
+                    ? { mode: 'bearer', bearerToken: auth.bearerToken }
+                    : { mode: 'none' },
+            allowInsecureTls: this.config.prometheus.allowInsecureTls,
+        });
+        const logging = {
+            debug: this.config.logging.debug,
+            logPromQueries: this.config.logging.logPromQueries,
+        };
+
         for (const room of this.config.rooms) {
             if (!room.enabled) {
                 continue;
@@ -147,7 +164,10 @@ export class PrometheusHeatingPlatform implements DynamicPlatformPlugin {
 
             const controller = createRoomController({
                 log: this.log,
-                config: this.config,
+                prometheus,
+                params: mergeControlParams(this.config.control, room),
+                pollIntervalMs: room.override?.pollIntervalMs ?? this.config.control.pollIntervalMs,
+                logging,
                 room,
                 thermostat,
                 persistedState: this.persistedState.rooms[room.id],

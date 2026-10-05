@@ -1,35 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createRoomController } from './room-controller.ts';
-import type { PluginConfig, RoomConfig } from '../config/schema.ts';
+import type { RoomConfig } from '../config/schema.ts';
+import type { ControlParams } from '../control/heating-controller.ts';
 import type { RoomThermostatAccessory } from '../accessories/room-thermostat.ts';
 import type { PrometheusClient } from '../clients/prometheus-client.ts';
 import type { ShellyDriver } from '../shelly';
 import type { Logging } from 'homebridge';
 import type { IntervalId, IntervalScheduler } from '../runtime/dependencies.ts';
-
-const minimalConfig = {
-    name: 'Test',
-    prometheus: {
-        allowInsecureTls: false,
-        auth: { mode: 'none' },
-        baseUrl: 'http://prom:9090',
-        queryTimeoutMs: 5000,
-    },
-    control: {
-        controlMode: 'hysteresis',
-        hysteresisC: 0.5,
-        maxTemperatureC: 60,
-        minOffMs: 60_000,
-        minOnMs: 60_000,
-        minTemperatureC: -20,
-        pollIntervalMs: 30_000,
-        pwmCycleMs: 300_000,
-        staleAfterMs: 180_000,
-        targetTemperatureC: 21,
-    },
-    rooms: [],
-    logging: { debug: false, logPromQueries: false },
-} as const satisfies PluginConfig;
 
 const minimalRoom = {
     id: 'room1',
@@ -46,6 +23,21 @@ const minimalRoom = {
     },
     enabled: true,
 } as const satisfies RoomConfig;
+
+// Mirrors what the platform would compose: mergeControlParams(global, room)
+// with the values the old minimalConfig.control carried.
+const controlParams = {
+    controlMode: 'hysteresis',
+    hysteresisC: 0.5,
+    maxTargetTemperatureC: 24,
+    maxTemperatureC: 60,
+    minOffMs: 60_000,
+    minOnMs: 60_000,
+    minTargetTemperatureC: 18,
+    minTemperatureC: -20,
+    pwmCycleMs: 300_000,
+    staleAfterMs: 180_000,
+} as const satisfies ControlParams;
 
 function createFakeThermostat(
     initialTarget: number,
@@ -101,7 +93,6 @@ function createFakeThermostat(
 
 describe('createRoomController', () => {
     it('starts, runs one tick, and invokes onStatePersist and thermostat updates', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const persistCalls: [string, boolean][] = [];
         const log = {
@@ -124,18 +115,18 @@ describe('createRoomController', () => {
         };
 
         const setIntervalCalls: Array<() => void> = [];
+        const setIntervalDelays: number[] = [];
         const clearIntervalCalls: ReturnType<IntervalScheduler['setInterval']>[] = [];
         let intervalId = 0;
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
-                    setInterval: (cb: () => void): IntervalId => {
+                    setInterval: (cb: () => void, ms: number): IntervalId => {
                         setIntervalCalls.push(cb);
+                        setIntervalDelays.push(ms);
                         intervalId += 1;
                         return intervalId as unknown as IntervalId;
                     },
@@ -145,6 +136,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 45_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: (roomId, relayOn) => persistCalls.push([roomId, relayOn]),
             persistedState: undefined,
             room: minimalRoom,
@@ -160,13 +155,13 @@ describe('createRoomController', () => {
         expect(thermostat.updates.currentTemp).toBe(20);
         expect(thermostat.updates.targetTemp).toBe(21);
         expect(setIntervalCalls.length).toBe(1);
+        expect(setIntervalDelays).toEqual([45_000]);
 
         controller.stop();
         expect(clearIntervalCalls).toContain(intervalId);
     });
 
     it('triggerImmediate fires an extra Shelly call without waiting for poll', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const log = {
             debug: vi.fn(),
@@ -190,10 +185,8 @@ describe('createRoomController', () => {
         };
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -201,6 +194,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
@@ -223,8 +220,6 @@ describe('createRoomController', () => {
         // Simulates the HAP race: characteristic.value has NOT been committed yet
         // when the set-event fires. The handler receives the new value as a parameter
         // and must use it directly rather than reading from getTargetTemperature().
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
-
         // getTargetTemperature() always returns the OLD value (21) to simulate
         // the characteristic not yet being committed by HAP.
         const thermostat = createFakeThermostat(21);
@@ -258,7 +253,6 @@ describe('createRoomController', () => {
         const controller = createRoomController({
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -266,11 +260,14 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
             thermostat,
-            config,
         });
 
         controller.start();
@@ -290,7 +287,6 @@ describe('createRoomController', () => {
     });
 
     it('concurrent triggerImmediate while tick is in progress is coalesced to one extra run', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const log = {
             debug: vi.fn(),
@@ -319,10 +315,8 @@ describe('createRoomController', () => {
         };
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -330,6 +324,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
@@ -356,8 +354,8 @@ describe('createRoomController', () => {
     });
 
     it('mode change triggers an immediate tick', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
-        const thermostat = createFakeThermostat(21, 1); // starts in HEAT mode
+        const thermostat = createFakeThermostat(21, 1);
+        // starts in HEAT mode
         const setOnArgs: boolean[] = [];
         const fakePrometheus = {
             query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
@@ -380,10 +378,8 @@ describe('createRoomController', () => {
         } as unknown as Logging;
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -391,6 +387,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
@@ -417,7 +417,6 @@ describe('createRoomController', () => {
     it('treats a sample without a timestamp as infinitely old and forces the relay off', async () => {
         // Sentinel-path pin for the single staleness rule: value present but
         // timestampMs 0 → age derivation must yield Infinity → stale → setOn(false).
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const setOnArgs: boolean[] = [];
         const warn = vi.fn();
@@ -442,10 +441,8 @@ describe('createRoomController', () => {
         };
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -453,6 +450,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
@@ -468,7 +469,6 @@ describe('createRoomController', () => {
     });
 
     it('does not call onStatePersist when the Shelly setOn call rejects', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const persistCalls: [string, boolean][] = [];
         const warn = vi.fn();
@@ -490,10 +490,8 @@ describe('createRoomController', () => {
         };
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -501,6 +499,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: (roomId, relayOn) => persistCalls.push([roomId, relayOn]),
             persistedState: undefined,
             room: minimalRoom,
@@ -518,7 +520,6 @@ describe('createRoomController', () => {
     });
 
     it('calls onStatePersist on every successful setOn, even when the relay value is unchanged', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const persistCalls: [string, boolean][] = [];
         const log = {
@@ -539,10 +540,8 @@ describe('createRoomController', () => {
         };
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -550,6 +549,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: (roomId, relayOn) => persistCalls.push([roomId, relayOn]),
             persistedState: undefined,
             room: minimalRoom,
@@ -570,8 +573,8 @@ describe('createRoomController', () => {
     });
 
     it('does not override TargetHeatingCoolingState back to HEAT on periodic ticks', async () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21, 1);
+
         const fakePrometheus = {
             query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
         } as unknown as PrometheusClient;
@@ -590,10 +593,8 @@ describe('createRoomController', () => {
         } as unknown as Logging;
 
         const controller = createRoomController({
-            config,
             deps: {
                 clock: { now: () => 200_000 },
-                createPrometheusClient: () => fakePrometheus,
                 createShellyDriver: async () => fakeDriver,
                 intervalScheduler: {
                     setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
@@ -601,6 +602,10 @@ describe('createRoomController', () => {
                 },
             },
             log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             onStatePersist: () => {},
             persistedState: undefined,
             room: minimalRoom,
@@ -617,8 +622,99 @@ describe('createRoomController', () => {
         controller.stop();
     });
 
+    it('logs the tick debug line and not the PromQL line when logging.debug is on', async () => {
+        const thermostat = createFakeThermostat(21);
+        const log = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            prefix: '',
+            success: vi.fn(),
+            log: vi.fn(),
+        } as unknown as Logging;
+        const fakePrometheus = {
+            query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
+        } as unknown as PrometheusClient;
+        const fakeDriver: ShellyDriver = {
+            setOn: vi.fn().mockResolvedValue(undefined),
+            getOn: vi.fn().mockResolvedValue(false),
+        };
+
+        const controller = createRoomController({
+            deps: {
+                clock: { now: () => 200_000 },
+                createShellyDriver: async () => fakeDriver,
+                intervalScheduler: {
+                    setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
+                    clearInterval: vi.fn(),
+                },
+            },
+            log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: true, logPromQueries: false },
+            onStatePersist: () => {},
+            persistedState: undefined,
+            room: minimalRoom,
+            thermostat,
+        });
+
+        controller.start();
+        await vi.waitFor(() => expect(log.debug).toHaveBeenCalledWith(expect.stringContaining('] tick temp=')));
+        expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('PromQL:'));
+
+        controller.stop();
+    });
+
+    it('logs the PromQL line and not the tick debug line when logging.logPromQueries is on', async () => {
+        const thermostat = createFakeThermostat(21);
+        const log = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            prefix: '',
+            success: vi.fn(),
+            log: vi.fn(),
+        } as unknown as Logging;
+        const fakePrometheus = {
+            query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 200_000 }),
+        } as unknown as PrometheusClient;
+        const fakeDriver: ShellyDriver = {
+            setOn: vi.fn().mockResolvedValue(undefined),
+            getOn: vi.fn().mockResolvedValue(false),
+        };
+
+        const controller = createRoomController({
+            deps: {
+                clock: { now: () => 200_000 },
+                createShellyDriver: async () => fakeDriver,
+                intervalScheduler: {
+                    setInterval: () => 1 as unknown as ReturnType<IntervalScheduler['setInterval']>,
+                    clearInterval: vi.fn(),
+                },
+            },
+            log,
+            prometheus: fakePrometheus,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: true },
+            onStatePersist: () => {},
+            persistedState: undefined,
+            room: minimalRoom,
+            thermostat,
+        });
+
+        controller.start();
+        await vi.waitFor(() => expect(log.debug).toHaveBeenCalledWith(expect.stringContaining('PromQL:')));
+        expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('] tick temp='));
+
+        controller.stop();
+    });
+
     it('stop clears interval and nulls driver', () => {
-        const config = { ...minimalConfig, rooms: [minimalRoom] };
         const thermostat = createFakeThermostat(21);
         const log = {
             debug: vi.fn(),
@@ -632,16 +728,17 @@ describe('createRoomController', () => {
         let driverCreated = false;
         const controller = createRoomController({
             log,
-            config,
+            prometheus: {
+                query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 0 }),
+            } as unknown as PrometheusClient,
+            params: controlParams,
+            pollIntervalMs: 30_000,
+            logging: { debug: false, logPromQueries: false },
             room: minimalRoom,
             thermostat,
             persistedState: undefined,
             onStatePersist: () => {},
             deps: {
-                createPrometheusClient: () =>
-                    ({
-                        query: vi.fn().mockResolvedValue({ value: 20, timestampMs: 0 }),
-                    }) as unknown as PrometheusClient,
                 createShellyDriver: async () => {
                     driverCreated = true;
                     return {
