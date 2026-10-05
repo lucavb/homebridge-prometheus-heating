@@ -3,7 +3,7 @@ import { APIEvent } from 'homebridge';
 import { pluginConfigSchema, type PluginConfig } from './config/schema.ts';
 import { mergeControlParams } from './config/merge-control-params.ts';
 import { PrometheusClient } from './clients/prometheus-client.ts';
-import { createRoomThermostat } from './accessories/room-thermostat.ts';
+import { attachRoomThermostat, createRoomThermostat } from './accessories/room-thermostat.ts';
 import { createRoomController } from './room-controller/index.ts';
 import {
     loadPersistedState,
@@ -106,46 +106,11 @@ export class PrometheusHeatingPlatform implements DynamicPlatformPlugin {
                 if (!svc) {
                     continue;
                 }
-                thermostat = {
-                    accessory,
-                    updateCurrentTemperature: (v) =>
-                        svc.getCharacteristic(hap.Characteristic.CurrentTemperature).updateValue(v),
-                    updateTargetTemperature: (v) =>
-                        svc.getCharacteristic(hap.Characteristic.TargetTemperature).updateValue(v),
-                    updateCurrentHeatingCoolingState: (v) =>
-                        svc.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState).updateValue(v),
-                    updateTargetHeatingCoolingState: (v) =>
-                        svc.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState).updateValue(v),
-                    getTargetTemperature: () =>
-                        (svc.getCharacteristic(hap.Characteristic.TargetTemperature).value as number) ??
-                        room.targetTemperatureC,
-                    getTargetHeatingCoolingState: () =>
-                        (svc.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState).value as number) ?? 1,
-                    setTargetTemperatureHandler: (handler) => {
-                        svc.getCharacteristic(hap.Characteristic.TargetTemperature).on(
-                            'set',
-                            (value: unknown, cb: () => void) => {
-                                const v = typeof value === 'number' ? value : Number(value);
-                                if (Number.isFinite(v)) {
-                                    handler(v);
-                                }
-                                cb();
-                            },
-                        );
-                    },
-                    setTargetHeatingCoolingStateHandler: (handler) => {
-                        svc.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState).on(
-                            'set',
-                            (value: unknown, cb: () => void) => {
-                                const v = typeof value === 'number' ? value : Number(value);
-                                if (Number.isFinite(v)) {
-                                    handler(v);
-                                }
-                                cb();
-                            },
-                        );
-                    },
-                };
+                thermostat = attachRoomThermostat(hap, accessory, svc, {
+                    initialTargetC: room.targetTemperatureC,
+                    minTargetC: room.minTargetTemperatureC,
+                    maxTargetC: room.maxTargetTemperatureC,
+                });
             } else {
                 thermostat = createRoomThermostat(
                     hap,

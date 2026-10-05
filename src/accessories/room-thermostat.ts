@@ -1,9 +1,17 @@
-import type { HAP, Logging, PlatformAccessory } from 'homebridge';
+import type { HAP, Logging, PlatformAccessory, Service } from 'homebridge';
 
-const HEAT = 1;
-const OFF = 0;
+// HAP characteristic values for the Thermostat service. Homed in this module — the
+// Thermostat adapter owns them — and re-exported by room-controller/types.ts.
+export const HEAT = 1;
+export const OFF = 0;
 
-type PlatformAccessoryConstructor = typeof PlatformAccessory;
+export type PlatformAccessoryConstructor = typeof PlatformAccessory;
+
+export interface ThermostatWiringOptions {
+    initialTargetC: number;
+    minTargetC: number;
+    maxTargetC: number;
+}
 
 export interface RoomThermostatAccessory {
     accessory: PlatformAccessory;
@@ -13,8 +21,96 @@ export interface RoomThermostatAccessory {
     setTargetHeatingCoolingStateHandler(handler: (value: number) => void): void;
     updateCurrentHeatingCoolingState(state: number): void;
     updateCurrentTemperature(value: number): void;
-    updateTargetHeatingCoolingState(state: number): void;
     updateTargetTemperature(value: number): void;
+}
+
+// Coerces a characteristic set-value to a finite number; null when the value
+// would not be finite (NaN/Infinity/garbage strings).
+function toFiniteNumber(value: unknown): number | null {
+    const v = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(v) ? v : null;
+}
+
+// `applyInitialValues` is true for the new-accessory path and false for the
+// attach path: a cached accessory's characteristic values are HAP-persisted
+// user state and must survive restarts (setProps IS always re-applied).
+function wireThermostatService(
+    hap: HAP,
+    accessory: PlatformAccessory,
+    service: Service,
+    opts: ThermostatWiringOptions,
+    applyInitialValues: boolean,
+): RoomThermostatAccessory {
+    const { initialTargetC, minTargetC, maxTargetC } = opts;
+
+    const currentTemperature = service.getCharacteristic(hap.Characteristic.CurrentTemperature);
+    const targetTemperature = service.getCharacteristic(hap.Characteristic.TargetTemperature);
+    const currentHeatingCoolingState = service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState);
+    const targetHeatingCoolingState = service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState);
+    // All five characteristics are the same shared wiring on BOTH paths — the
+    // fetch here also creates them on a new service; only the setValue and
+    // setProps blocks below actually write.
+    const temperatureDisplayUnits = service.getCharacteristic(hap.Characteristic.TemperatureDisplayUnits);
+
+    if (applyInitialValues) {
+        currentTemperature.setValue(initialTargetC);
+        targetTemperature.setValue(initialTargetC);
+        currentHeatingCoolingState.setValue(OFF);
+        targetHeatingCoolingState.setValue(HEAT);
+        temperatureDisplayUnits.setValue(hap.Characteristic.TemperatureDisplayUnits.CELSIUS);
+    }
+
+    currentTemperature.setProps({ minValue: -20, maxValue: 60 });
+    targetTemperature.setProps({ minValue: minTargetC, maxValue: maxTargetC, minStep: 0.1 });
+    targetHeatingCoolingState.setProps({
+        minValue: OFF,
+        maxValue: HEAT,
+        validValues: [OFF, HEAT],
+    });
+
+    let targetHandler: ((value: number) => void) | undefined;
+    let modeHandler: ((value: number) => void) | undefined;
+
+    targetTemperature.on('set', (value: unknown, callback: () => void) => {
+        const v = toFiniteNumber(value);
+        if (v !== null) {
+            targetHandler?.(v);
+        }
+        callback();
+    });
+
+    targetHeatingCoolingState.on('set', (value: unknown, callback: () => void) => {
+        const v = toFiniteNumber(value);
+        if (v !== null) {
+            modeHandler?.(v);
+        }
+        callback();
+    });
+
+    return {
+        accessory,
+        updateCurrentTemperature(value: number) {
+            currentTemperature.updateValue(value);
+        },
+        updateTargetTemperature(value: number) {
+            targetTemperature.updateValue(value);
+        },
+        updateCurrentHeatingCoolingState(state: number) {
+            currentHeatingCoolingState.updateValue(state);
+        },
+        getTargetTemperature() {
+            return (targetTemperature.value as number) ?? initialTargetC;
+        },
+        getTargetHeatingCoolingState() {
+            return (targetHeatingCoolingState.value as number) ?? HEAT;
+        },
+        setTargetTemperatureHandler(handler: (value: number) => void) {
+            targetHandler = handler;
+        },
+        setTargetHeatingCoolingStateHandler(handler: (value: number) => void) {
+            modeHandler = handler;
+        },
+    };
 }
 
 export function createRoomThermostat(
@@ -32,78 +128,14 @@ export function createRoomThermostat(
 
     const service = accessory.addService(hap.Service.Thermostat, displayName);
 
-    service
-        .getCharacteristic(hap.Characteristic.CurrentTemperature)
-        .setValue(initialTargetC)
-        .setProps({ minValue: -20, maxValue: 60 });
+    return wireThermostatService(hap, accessory, service, { initialTargetC, minTargetC, maxTargetC }, true);
+}
 
-    service
-        .getCharacteristic(hap.Characteristic.TargetTemperature)
-        .setValue(initialTargetC)
-        .setProps({ minValue: minTargetC, maxValue: maxTargetC, minStep: 0.1 });
-
-    service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState).setValue(OFF);
-    service
-        .getCharacteristic(hap.Characteristic.TargetHeatingCoolingState)
-        .setValue(HEAT)
-        .setProps({
-            minValue: OFF,
-            maxValue: HEAT,
-            validValues: [OFF, HEAT],
-        });
-
-    service
-        .getCharacteristic(hap.Characteristic.TemperatureDisplayUnits)
-        .setValue(hap.Characteristic.TemperatureDisplayUnits.CELSIUS);
-
-    let targetHandler: ((value: number) => void) | undefined;
-    let modeHandler: ((value: number) => void) | undefined;
-
-    service
-        .getCharacteristic(hap.Characteristic.TargetTemperature)
-        .on('set', (value: unknown, callback: () => void) => {
-            const v = typeof value === 'number' ? value : Number(value);
-            if (Number.isFinite(v)) {
-                targetHandler?.(v);
-            }
-            callback();
-        });
-
-    service
-        .getCharacteristic(hap.Characteristic.TargetHeatingCoolingState)
-        .on('set', (value: unknown, callback: () => void) => {
-            const v = typeof value === 'number' ? value : Number(value);
-            if (Number.isFinite(v)) {
-                modeHandler?.(v);
-            }
-            callback();
-        });
-
-    return {
-        accessory,
-        updateCurrentTemperature(value: number) {
-            service.getCharacteristic(hap.Characteristic.CurrentTemperature).updateValue(value);
-        },
-        updateTargetTemperature(value: number) {
-            service.getCharacteristic(hap.Characteristic.TargetTemperature).updateValue(value);
-        },
-        updateCurrentHeatingCoolingState(state: number) {
-            service.getCharacteristic(hap.Characteristic.CurrentHeatingCoolingState).updateValue(state);
-        },
-        updateTargetHeatingCoolingState(state: number) {
-            service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState).updateValue(state);
-        },
-        getTargetTemperature() {
-            return (service.getCharacteristic(hap.Characteristic.TargetTemperature).value as number) ?? initialTargetC;
-        },
-        getTargetHeatingCoolingState() {
-            return (service.getCharacteristic(hap.Characteristic.TargetHeatingCoolingState).value as number) ?? HEAT;
-        },
-        setTargetTemperatureHandler(handler: (value: number) => void) {
-            targetHandler = handler;
-        },
-        setTargetHeatingCoolingStateHandler(handler: (value: number) => void) {
-            modeHandler = handler;
-        },
-    };
+export function attachRoomThermostat(
+    hap: HAP,
+    accessory: PlatformAccessory,
+    service: Service,
+    opts: ThermostatWiringOptions,
+): RoomThermostatAccessory {
+    return wireThermostatService(hap, accessory, service, opts, false);
 }

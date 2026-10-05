@@ -43,14 +43,13 @@ function createFakeThermostat(
     initialTarget: number,
     initialMode = 1,
 ): RoomThermostatAccessory & {
-    updates: { currentTemp?: number; targetTemp?: number; currentState?: number; targetState?: number };
+    updates: { currentTemp?: number; targetTemp?: number; currentState?: number };
     simulateTargetSet(value: number): void;
     simulateModeSet(value: number): void;
 } {
     const updates: {
         currentState?: number;
         currentTemp?: number;
-        targetState?: number;
         targetTemp?: number;
     } = {};
     let currentMode = initialMode;
@@ -66,9 +65,6 @@ function createFakeThermostat(
         },
         updateCurrentHeatingCoolingState: (v: number) => {
             updates.currentState = v;
-        },
-        updateTargetHeatingCoolingState: (v: number) => {
-            updates.targetState = v;
         },
         getTargetTemperature: () => initialTarget,
         getTargetHeatingCoolingState: () => currentMode,
@@ -572,7 +568,7 @@ describe('createRoomController', () => {
         controller.stop();
     });
 
-    it('does not override TargetHeatingCoolingState back to HEAT on periodic ticks', async () => {
+    it('writes the loop state to the Thermostat without touching user-set values', async () => {
         const thermostat = createFakeThermostat(21, 1);
 
         const fakePrometheus = {
@@ -614,12 +610,16 @@ describe('createRoomController', () => {
 
         controller.start();
         await vi.waitFor(() => expect(fakePrometheus.query).toHaveBeenCalled());
-        await vi.waitFor(() => expect(thermostat.updates.currentState !== undefined).toBe(true));
-
-        // TargetHeatingCoolingState must never be written by the control loop.
-        expect(thermostat.updates.targetState).toBeUndefined();
+        await vi.waitFor(() =>
+            expect(thermostat.updates).toEqual({ currentTemp: 20, targetTemp: 21, currentState: 1 }),
+        );
 
         controller.stop();
+        // First tick: temp 20 < target 21 with hysteresis 0.5 → relay ON → state HEAT.
+        // Exact-shape pin: any extra recorded loop channel (e.g. a resurrected mode
+        // writer) fails here. The stronger guards are structural:
+        // RoomThermostatAccessory has no updateTargetHeatingCoolingState member, and
+        // room-thermostat.test.ts pins its absence from the returned adapter object.
     });
 
     it('logs the tick debug line and not the PromQL line when logging.debug is on', async () => {

@@ -9,8 +9,7 @@ import type { RoomPersistedState } from '../state/persisted-state.ts';
 import type { Clock, IntervalScheduler } from '../runtime/dependencies.ts';
 import { defaultClock, defaultIntervalScheduler } from '../runtime/dependencies.ts';
 
-export const HEAT = 1;
-export const OFF = 0;
+export { HEAT, OFF } from '../accessories/room-thermostat.ts';
 
 export interface RoomControllerDeps {
     createShellyDriver: (config: ShellyConfig) => Promise<ShellyDriver>;
